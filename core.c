@@ -68,6 +68,7 @@ struct mctp {
 	enum {
 		ROUTE_ENDPOINT,
 		ROUTE_BRIDGE,
+		ROUTE_RAW,
 	}			route_policy;
 	size_t max_message_size;
 };
@@ -189,6 +190,13 @@ static struct mctp_msg_ctx *mctp_msg_ctx_lookup(struct mctp *mctp,
 	return NULL;
 }
 
+static void mctp_rx_raw(struct mctp *mctp, struct mctp_pktbuf *pkt)
+{
+       if (mctp->message_rx)
+               mctp->message_rx(0, 0, 0, mctp->message_rx_data,
+                                pkt->data + pkt->mctp_hdr_off,
+                                   pkt->end - pkt->mctp_hdr_off);
+}
 static struct mctp_msg_ctx *mctp_msg_ctx_create(struct mctp *mctp,
 		uint8_t src, uint8_t dest, uint8_t tag)
 {
