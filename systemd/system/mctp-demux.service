@@ -5,5 +5,5 @@ Description=MCTP demultiplexer daemon
 Restart=always
 Environment=DEMUX_BINDING_OPTS=null
 EnvironmentFile=-/etc/default/mctp
-ExecStart=/usr/bin/mctp-demux-daemon $DEMUX_BINDING_OPTS
+ExecStart=/usr/bin/mctp-demux-daemon $DEMUX_BINDING_OPTS -v
 SyslogIdentifier=mctp-demux

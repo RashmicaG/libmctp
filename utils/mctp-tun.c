@@ -18,9 +18,11 @@
 #include <linux/if_ether.h>
 #include <linux/if_tun.h>
 
-
+#include "container_of.h"
 #include "libmctp.h"
 #include "libmctp-astlpc.h"
+#include "libmctp-alloc.h"
+#include "libmctp-log.h"
 
 #ifndef ETH_P_MCTP
 #define ETH_P_MCTP     0x00fa
@@ -28,15 +30,75 @@
 
 static const size_t MAX_MTU = 64 * 1024;
 
-struct ctx {
-       struct mctp *mctp;
-       struct mctp_binding_astlpc *astlpc;
+
+// todo: put in sep tun binding file
+struct mctp_binding_raw {
+       struct mctp_binding      binding;
        int tun_fd;
        void *tun_buf;
        size_t tun_buf_size;
 };
 
-static int tun_init(struct ctx *ctx)
+struct ctx {
+       struct mctp *mctp;
+       struct mctp_binding_astlpc *astlpc;
+       struct mctp_binding_raw *tun;
+       int tun_fd;
+       void *tun_buf;
+       size_t tun_buf_size;
+};
+
+struct mctp_binding *mctp_binding_raw_core(struct mctp_binding_raw *b)
+{
+      return &b->binding;
+}
+
+#define binding_to_raw(b) \
+        container_of(b, struct mctp_binding_raw, binding)
+
+
+static int mctp_binding_raw_tx(struct mctp_binding *b, struct mctp_pktbuf *pkt)
+{
+	struct mctp_binding_raw *binding = binding_to_raw(b);
+	int wlen = 0;
+	struct tun_pi tun_pi;
+	struct iovec iov[2];
+	
+	printf("in raw tx\n");
+
+	tun_pi.flags = 0;
+	tun_pi.proto = htobe16(ETH_P_MCTP);
+	
+	iov[0].iov_base = &tun_pi;
+	iov[0].iov_len = sizeof(tun_pi);
+	iov[1].iov_base = pkt;
+	iov[1].iov_len = mctp_pktbuf_size(pkt);
+	
+	wlen = writev(binding->tun_fd, iov, 2);
+	if (wlen != sizeof(tun_pi) + mctp_pktbuf_size(pkt)) {
+	        warnx("tun short write (wrote %zd, expected %zd)",
+	              wlen, sizeof(tun_pi) + mctp_pktbuf_size(pkt));
+	}
+
+	return wlen;
+}
+
+static struct mctp_binding_raw *mctp_tun_init()
+{
+       struct mctp_binding_raw *tun;
+
+       tun = __mctp_alloc(sizeof(*tun));
+       memset(tun, 0, sizeof(*tun));
+       tun->binding.name = "tun";
+       tun->binding.pkt_size = MCTP_PACKET_SIZE(MCTP_BTU);
+       tun->binding.version = 1;
+       tun->binding.pkt_header = 4;
+       tun->binding.pkt_trailer = 4;
+       tun->binding.tx = mctp_binding_raw_tx;
+       return tun;
+}
+
+static int tun_init(struct mctp_binding_raw *tun)
 {
        struct ifreq ifreq;
        int fd, rc;
@@ -60,7 +122,7 @@ static int tun_init(struct ctx *ctx)
 
        /* todo: set MTU to match astlpc binding? */
 
-       ctx->tun_fd = fd;
+       tun->tun_fd = fd;
        return 0;
 }
 
@@ -82,7 +144,7 @@ static void packet_rx(uint8_t src_eid, bool tag_owner, uint8_t tag,
        iov[1].iov_base = pkt;
        iov[1].iov_len = len;
 
-       wlen = writev(ctx->tun_fd, iov, 2);
+       wlen = writev(ctx->tun->tun_fd, iov, 2);
        if (wlen < 0) {
                warn("tun write");
        } else if (wlen != sizeof(tun_pi) + len) {
@@ -91,7 +153,7 @@ static void packet_rx(uint8_t src_eid, bool tag_owner, uint8_t tag,
        }
 }
 
-static int tun_read(struct ctx *ctx)
+int tun_read(struct ctx *ctx)
 {
        struct tun_pi tun_pi;
        struct iovec iov[2];
@@ -100,27 +162,43 @@ static int tun_read(struct ctx *ctx)
 
        iov[0].iov_base = &tun_pi;
        iov[0].iov_len = sizeof(tun_pi);
-       iov[1].iov_base = ctx->tun_buf;
-       iov[1].iov_len = ctx->tun_buf_size;
+       iov[1].iov_base = ctx->tun->tun_buf;
+       iov[1].iov_len = ctx->tun->tun_buf_size;
 
-       rlen = readv(ctx->tun_fd, iov, 2);
+	int len;
+ 	char buf[MAX_MTU];
+  	len = read(ctx->tun->tun_fd, buf, MAX_MTU);
+	if (len < 0) {
+		perror("read");
+  	}
+	for (int i = 0; i < len; i++)
+		printf("%c",buf[i]);
+	printf("\n");
+
+
+       rlen = readv(ctx->tun->tun_fd, iov, 2);
        if (rlen < 0) {
                warn("tun read failed");
                return -1;
        }
 
-       if (rlen < sizeof(tun_pi) + 4) {
-               warn("tun short read (%zd bytes)", rlen);
+       if (rlen < sizeof(tun_pi)) {
+               warn("tun short read header (%zd bytes)", rlen);
                return -1;
        }
-
-       rlen -= sizeof(tun_pi);
 
        if (tun_pi.proto != htobe16(ETH_P_MCTP))
                return 0;
 
+       if (rlen < sizeof(tun_pi) + 4) {
+               warn("tun short read (%zd bytes)", rlen);
+//               return -1;
+       }
+
+       rlen -= sizeof(tun_pi);
+
        rc = mctp_packet_raw_tx(mctp_binding_astlpc_core(ctx->astlpc),
-                               ctx->tun_buf, rlen);
+                               ctx->tun->tun_buf, rlen);
        if (rc)
                warnx("mctp packet tx failed");
 
@@ -136,33 +214,37 @@ int main(void)
 
        ctx->mctp = mctp_init();
 
+       /* Setup astlpc binding */
        ctx->astlpc = mctp_astlpc_init_fileio();
        if (!ctx->astlpc)
                errx(EXIT_FAILURE, "can't init astlpc hardware transport");
 
-       rc = tun_init(ctx);
+       /* Setup raw binding */
+       ctx->tun = mctp_tun_init();
+       rc = tun_init(ctx->tun);
        if (rc)
-               return EXIT_FAILURE;
-
-       rc = mctp_register_raw_bus(ctx->mctp,
-                                  mctp_binding_astlpc_core(ctx->astlpc));
-       if (rc)
-               errx(EXIT_FAILURE, "can't register MCTP bus");
-
-       rc = mctp_set_rx_all(ctx->mctp, packet_rx, ctx);
-       if (rc)
-               errx(EXIT_FAILURE, "can't register MCTP rx callback");
+               errx(EXIT_FAILURE, "can't init tun device");
 
        ctx->tun_buf_size = MAX_MTU;
        ctx->tun_buf = malloc(ctx->tun_buf_size);
        if (!ctx->tun_buf)
                errx(EXIT_FAILURE, "malloc");
 
+       /* Connect the two bindings */
+       rc = mctp_bridge_busses(ctx->mctp, mctp_binding_astlpc_core(ctx->astlpc), mctp_binding_raw_core(ctx->tun));
+       if (rc)
+               errx(EXIT_FAILURE, "can't connect lpc and tun bindings");
+
+	/* Enable bindings */
+        mctp_binding_set_tx_enabled(mctp_binding_astlpc_core(ctx->astlpc), true);
+        mctp_binding_set_tx_enabled(mctp_binding_raw_core(ctx->tun), true);
+
+
        for (;;) {
                struct pollfd pollfds[2];
 
-               pollfds[0].fd = ctx->tun_fd;
-               pollfds[0].events = POLLIN;
+	        pollfds[0].fd = ctx->tun->tun_fd;
+	        pollfds[0].events = POLLIN;
                pollfds[1].fd = mctp_astlpc_get_fd(ctx->astlpc);
                pollfds[1].events = POLLIN | POLLOUT;
 
