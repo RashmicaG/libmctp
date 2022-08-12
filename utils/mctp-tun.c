@@ -134,6 +134,7 @@ static void packet_rx(uint8_t src_eid, bool tag_owner, uint8_t tag,
        struct iovec iov[2];
        ssize_t wlen;
 
+	printf("in packet rx\n");
        wlen = 0;
 
        tun_pi.flags = 0;
@@ -212,6 +213,7 @@ int main(void)
 
        ctx = &_ctx;
 
+       mctp_set_log_stdio(7);
        ctx->mctp = mctp_init();
 
        /* Setup astlpc binding */

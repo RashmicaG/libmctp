@@ -84,6 +84,8 @@ static void tx_message(struct ctx *ctx, mctp_eid_t eid, void *msg, size_t len)
 {
 	int rc;
 
+	fprintf(stderr, "Sending MCTP message: len %zd, to eid %d\n",
+				len, eid);
 	rc = mctp_message_tx(ctx->mctp, eid, MCTP_MESSAGE_TO_SRC, 0, msg, len);
 	if (rc)
 		warnx("Failed to send message: %d", rc);
@@ -324,6 +326,7 @@ static int socket_process(struct ctx *ctx)
 	struct client *client;
 	int fd;
 
+	fprintf(stderr, "New client\n");
 	fd = accept4(ctx->sock, NULL, 0, SOCK_NONBLOCK);
 	if (fd < 0)
 		return -1;
@@ -488,6 +491,7 @@ static int run_daemon(struct ctx *ctx)
 
 	mctp_set_rx_all(ctx->mctp, rx_message, ctx);
 
+	fprintf(stderr, "number clients: %d\n",ctx->n_clients);
 	for (;;) {
 		if (clients_changed) {
 			int i;
@@ -629,6 +633,7 @@ int main(int argc, char * const *argv)
 			return EXIT_FAILURE;
 		}
 	}
+	ctx->verbose = true;
 
 	if (optind >= argc) {
 		fprintf(stderr, "missing binding argument\n");
@@ -699,7 +704,9 @@ int main(int argc, char * const *argv)
 			fprintf(stderr, "Failed to initialse socket: %d\n", rc);
 			goto cleanup_binding;
 		}
+	fprintf(stderr, "Socket inited\n");
 	} else {
+	fprintf(stderr, "found %d fds\n", rc);
 		ctx->sock = SD_LISTEN_FDS_START;
 	}
 

@@ -530,6 +530,7 @@ static void mctp_rx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 	mctp_eid_t src = -1, dest = -1;
 
 	assert(bus);
+	mctp_prerr("bus rx\n");
 
 	hdr = mctp_pktbuf_hdr(pkt);
 	flags = hdr->flags_seq_tag & (MCTP_HDR_FLAG_SOM | MCTP_HDR_FLAG_EOM);
@@ -770,9 +771,16 @@ void mctp_binding_set_tx_enabled(struct mctp_binding *binding, bool enable)
 
 	switch(bus->state) {
 	case mctp_bus_state_constructed:
+		mctp_prerr("bus state constucted\n");
 		if (!enable)
 			return;
 
+			mctp_prerr(" %s binding has MTU: %zu %zu %zu",
+				   binding->name,
+				   MCTP_BODY_SIZE(binding->pkt_size), 
+					binding->pkt_size,
+					MCTP_PACKET_SIZE(MCTP_BTU)
+					);
 		if (binding->pkt_size < MCTP_PACKET_SIZE(MCTP_BTU)) {
 			mctp_prerr("Cannot start %s binding with invalid MTU: %zu",
 				   binding->name,
@@ -784,6 +792,7 @@ void mctp_binding_set_tx_enabled(struct mctp_binding *binding, bool enable)
 		mctp_prinfo("%s binding started", binding->name);
 		return;
 	case mctp_bus_state_tx_enabled:
+		mctp_prerr("bus state tx_enabled\n");
 		if (enable)
 			return;
 
@@ -791,6 +800,7 @@ void mctp_binding_set_tx_enabled(struct mctp_binding *binding, bool enable)
 		mctp_prdebug("%s binding Tx disabled", binding->name);
 		return;
 	case mctp_bus_state_tx_disabled:
+		mctp_prerr("bus state tx_disabled\n");
 		if (!enable)
 			return;
 
