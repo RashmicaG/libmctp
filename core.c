@@ -34,6 +34,10 @@ struct mctp_bus {
 	struct mctp_pktbuf *tx_queue_head;
 	struct mctp_pktbuf *tx_queue_tail;
 
+        /* Packet capture callback */
+        mctp_capture_fn         capture;
+        void                    *capture_data;
+
 	/* todo: routing */
 };
 
@@ -55,10 +59,6 @@ struct mctp {
 	/* Message RX callback */
 	mctp_rx_fn		message_rx;
 	void			*message_rx_data;
-
-	/* Packet capture callback */
-	mctp_capture_fn		capture;
-	void			*capture_data;
 
 	/* Message reassembly.
 	 * @todo: flexible context count
@@ -289,10 +289,10 @@ void mctp_set_max_message_size(struct mctp *mctp, size_t message_size)
 	mctp->max_message_size = message_size;
 }
 
-void mctp_set_capture_handler(struct mctp *mctp, mctp_capture_fn fn, void *user)
+void mctp_binding_set_capture_handler(struct mctp_binding *binding, mctp_capture_fn fn, void *user)
 {
-	mctp->capture = fn;
-	mctp->capture_data = user;
+	binding->bus->capture = fn;
+	binding->bus->capture_data = user;
 }
 
 static void mctp_bus_destroy(struct mctp_bus *bus)
@@ -547,8 +547,8 @@ void mctp_bus_rx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 	if (mctp_pktbuf_size(pkt) <= sizeof(struct mctp_hdr))
 		goto out;
 
-	if (mctp->capture)
-		mctp->capture(pkt, mctp->capture_data);
+	if (binding->bus->capture)
+		binding->bus->capture(pkt, binding->bus->capture_data);
 
 	hdr = mctp_pktbuf_hdr(pkt);
 
@@ -676,13 +676,13 @@ out:
 static int mctp_packet_tx(struct mctp_bus *bus,
 		struct mctp_pktbuf *pkt)
 {
-	struct mctp *mctp = bus->binding->mctp;
+	struct mctp_binding *binding = bus->binding;
 
 	if (bus->state != mctp_bus_state_tx_enabled)
 		return -1;
 
-	if (mctp->capture)
-		mctp->capture(pkt, mctp->capture_data);
+	if (binding->bus->capture)
+		binding->bus->capture(pkt, binding->bus->capture_data);
 
 	return bus->binding->tx(bus->binding, pkt);
 }
