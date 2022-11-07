@@ -976,6 +976,7 @@ static void mctp_astlpc_init_channel(struct mctp_binding_astlpc *astlpc)
 static void mctp_astlpc_rx_start(struct mctp_binding_astlpc *astlpc)
 {
 	struct mctp_pktbuf *pkt;
+	struct mctp_hdr *hdr;
 	uint32_t body, packet;
 
 	mctp_astlpc_lpc_read(astlpc, &body, astlpc->layout.rx.offset,
@@ -1022,6 +1023,11 @@ static void mctp_astlpc_rx_start(struct mctp_binding_astlpc *astlpc)
 	 * that always returns true.
 	 */
 	if (astlpc->proto->pktbuf_validate(pkt)) {
+		hdr = mctp_pktbuf_hdr(pkt);
+		if (hdr->ver != 1) {
+			astlpc_prdebug(astlpc, "Header was %d, changing to 1\n", hdr->ver);
+			hdr->ver = 1;
+		}
 		mctp_bus_rx(&astlpc->binding, pkt);
 	} else {
 		/* TODO: Drop any associated assembly */
