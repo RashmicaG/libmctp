@@ -521,8 +521,10 @@ static int mctp_astlpc_init_bmc(struct mctp_binding_astlpc *astlpc)
 	 * Query Hop in DSP0236 v1.3.0.
 	 */
 	sz = MCTP_BODY_SIZE(astlpc->proto->body_size(sz));
+	astlpc_prerr(astlpc,"mctp_astlpc_bmc, og size %d", sz);
 	sz &= ~0xfUL;
 	sz = astlpc->proto->packet_size(MCTP_PACKET_SIZE(sz));
+	astlpc_prerr(astlpc, "mctp_astlpc_bmc, size %d", sz);
 
 	if (astlpc->requested_mtu) {
 		uint32_t rpkt, rmtu;
@@ -530,6 +532,7 @@ static int mctp_astlpc_init_bmc(struct mctp_binding_astlpc *astlpc)
 		rmtu = astlpc->requested_mtu;
 		rpkt = astlpc->proto->packet_size(MCTP_PACKET_SIZE(rmtu));
 		sz = MIN(sz, rpkt);
+		astlpc_prerr(astlpc,"mctp_astlpc_bmc, size %d, rpkt %d, requested mtu %d", sz, rpkt, rmtu);
 	}
 
 	/* Flip the buffers as the names are defined in terms of the host */
@@ -912,6 +915,7 @@ static int mctp_astlpc_negotiate_layout_bmc(struct mctp_binding_astlpc *astlpc)
 
 		astlpc_prinfo(astlpc, "Negotiated an MTU of %" PRIu32 " bytes",
 			      mtu);
+		astlpc->binding.mtu = mtu;
 	} else {
 		astlpc_prwarn(astlpc, "MTU negotiation failed");
 		return -EINVAL;
@@ -920,6 +924,7 @@ static int mctp_astlpc_negotiate_layout_bmc(struct mctp_binding_astlpc *astlpc)
 	if (astlpc->proto->version >= 2)
 		astlpc->binding.pkt_size = MCTP_PACKET_SIZE(mtu);
 
+	astlpc_prerr(astlpc, "mctp_astlpc_negotiate_layout_bmc, mtu %d pkt_size %d other %d", mtu, astlpc->binding.pkt_size, MCTP_PACKET_SIZE(astlpc->binding.pkt_size));
 	return 0;
 }
 
@@ -1082,6 +1087,7 @@ static int mctp_astlpc_finalise_channel(struct mctp_binding_astlpc *astlpc)
 	if (negotiated >= 2)
 		astlpc->binding.pkt_size =
 			astlpc->proto->body_size(astlpc->layout.tx.size);
+	astlpc_prerr(astlpc,"mctp_astlpc_finalise_channel, mtu %d", MCTP_PACKET_SIZE(astlpc->binding.pkt_size));
 
 	/* Track buffer ownership */
 	astlpc->layout.tx.state = buffer_state_acquired;
@@ -1235,6 +1241,7 @@ static struct mctp_binding_astlpc *__mctp_astlpc_init(uint8_t mode,
 	astlpc->binding.version = 1;
 	astlpc->binding.pkt_size =
 		MCTP_PACKET_SIZE(mtu > MCTP_BTU ? mtu : MCTP_BTU);
+	astlpc_prerr(astlpc,"mctp_binding_astlpc, mtu %d", MCTP_PACKET_SIZE(astlpc->binding.pkt_size));
 	astlpc->binding.pkt_header = 4;
 	astlpc->binding.pkt_trailer = 4;
 	astlpc->binding.tx = mctp_binding_astlpc_tx;

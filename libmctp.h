@@ -135,6 +135,7 @@ struct mctp_binding {
 	/* Packet capture callback */
 	mctp_capture_fn		capture;
 	void			*capture_data;
+	size_t mtu;
 
 };
 

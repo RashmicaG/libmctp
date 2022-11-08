@@ -42,6 +42,10 @@ struct mctp_binding_raw {
        size_t tun_buf_size;
 };
 
+struct mctp_nl {
+	// socket for queries
+	int	sd;
+};
 struct ctx {
        struct mctp *mctp;
        struct mctp_binding_astlpc *astlpc;
@@ -54,6 +58,8 @@ struct ctx {
 		struct capture raw_binding;
 		struct capture socket;
 	} pcap;
+	struct mctp_nl			*nl;
+	bool			verbose;
 };
 
 struct mctp_binding *mctp_binding_raw_core(struct mctp_binding_raw *b)
@@ -212,6 +218,193 @@ static void usage(const char *progname)
 	fprintf(stderr, "usage: %s [params]\n", progname);
 }
 
+//
+#include <linux/rtnetlink.h>
+#include <sys/ioctl.h>
+#include <linux/if_link.h> 
+//#include <linux/if.h> 
+//#include <linux/netlink.h>
+//#include <net/if.h>
+void mctp_nl_close(struct mctp_nl *nl)
+{
+	close(nl->sd);
+	free(nl);
+}
+
+
+static int open_nl_socket(void)
+{
+	struct sockaddr_nl addr;
+	int opt, rc, sd = -1;
+
+	rc = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+	if (rc < 0)
+		goto err;
+	sd = rc;
+	memset(&addr, 0, sizeof(addr));
+	addr.nl_family = AF_NETLINK;
+	rc = bind(sd, (struct sockaddr *)&addr, sizeof(addr));
+	if (rc)
+		goto err;
+
+	opt = 1;
+	rc = setsockopt(sd, SOL_NETLINK, NETLINK_GET_STRICT_CHK,
+			&opt, sizeof(opt));
+	if (rc) {
+		rc = -errno;
+		goto err;
+	}
+
+	opt = 1;
+	rc = setsockopt(sd, SOL_NETLINK, NETLINK_EXT_ACK, &opt, sizeof(opt));
+	if (rc)
+	{
+		rc = -errno;
+		goto err;
+	}
+	return sd;
+err:
+	if (sd >= 0) {
+		close(sd);
+	}
+	return rc;
+}
+
+struct mctp_nl * mctp_nl_new(bool verbose)
+{
+	int rc;
+	struct mctp_nl *nl;
+
+	nl = calloc(1, sizeof(*nl));
+	if (!nl) {
+		warn("calloc failed");
+		return NULL;
+	}
+
+	nl->sd = -1;
+
+	nl->sd = open_nl_socket();
+	if (nl->sd < 0)
+		goto err;
+
+	return nl;
+err:
+	mctp_nl_close(nl);
+	return NULL;
+}
+/* Returns the space used */
+size_t mctp_put_rtnlmsg_attr(struct rtattr **prta, size_t *rta_len,
+	unsigned short type, const void* value, size_t val_len)
+{
+	struct rtattr *rta = *prta;
+	rta->rta_type = type;
+	rta->rta_len = RTA_LENGTH(val_len);
+	memcpy(RTA_DATA(rta), value, val_len);
+	*prta = RTA_NEXT(*prta, *rta_len);
+	return RTA_SPACE(val_len);
+}
+int mctp_nl_send(struct mctp_nl *nl, struct nlmsghdr *msg)
+{
+	struct sockaddr_nl addr;
+	int rc;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.nl_family = AF_NETLINK;
+	addr.nl_pid = 0;
+
+	rc = sendto(nl->sd, msg, msg->nlmsg_len, 0,
+			(struct sockaddr *)&addr, sizeof(addr));
+	if (rc < 0)
+		return rc;
+
+	if (rc != (int)msg->nlmsg_len)
+		warnx("sendto: short send (%d, expected %d)",
+				rc, msg->nlmsg_len);
+
+	if (msg->nlmsg_flags & NLM_F_ACK) {
+		warnx("MSG ACK SET\n");
+	}
+	return 0;
+}
+
+int mctp_nl_ifindex_byname(const struct mctp_nl *nl, const char *ifname)
+{
+	struct ifreq ifr;
+	size_t ifname_len=strlen(ifname);
+	memcpy(ifr.ifr_name, ifname, ifname_len);
+    	ifr.ifr_name[ifname_len] = 0;
+	//int fd = socket(AF_UNIX,SOCK_DGRAM,0);
+	//if (fd == -1) {
+    	//	warn("socket failed %s",strerror(errno));
+	//	return -1;
+	//}
+	if (ioctl(nl->sd ,SIOCGIFINDEX, &ifr) == -1) {
+    		warn("ioctl failed %s",strerror(errno));
+		return -1;
+	}
+	return ifr.ifr_ifindex;
+}
+
+
+static int do_link_set(struct ctx *ctx, int ifindex, bool have_updown, bool up,
+		uint32_t mtu, bool have_net, uint32_t net) {
+	struct {
+		struct nlmsghdr		nh;
+		struct ifinfomsg	ifmsg;
+		/* Space for all attributes */
+		uint8_t			rta_buff[200];
+	} msg = {0};
+	struct rtattr *rta;
+	size_t rta_len;
+
+	msg.nh.nlmsg_type = RTM_NEWLINK;
+	msg.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	msg.ifmsg.ifi_index = ifindex;
+
+	msg.nh.nlmsg_len = NLMSG_LENGTH(sizeof(msg.ifmsg));
+	rta_len = sizeof(msg.rta_buff);
+	rta = (void*)msg.rta_buff;
+
+	if (have_updown) {
+		msg.ifmsg.ifi_change |= IFF_UP;
+		if (up)
+			msg.ifmsg.ifi_flags |= IFF_UP;
+	}
+
+	if (mtu)
+		msg.nh.nlmsg_len += mctp_put_rtnlmsg_attr(&rta, &rta_len,
+			IFLA_MTU, &mtu, sizeof(mtu));
+
+	if (have_net) {
+		/* Nested
+		IFLA_AF_SPEC
+			AF_MCTP
+				IFLA_MCTP_NET
+				... future device properties
+		*/
+		struct rtattr *rta1, *rta2;
+		size_t rta_len1, rta_len2, space1, space2;
+		uint8_t buff1[100], buff2[100];
+
+		rta2 = (void*)buff2;
+		rta_len2 = sizeof(buff2);
+		space2 = 0;
+		if (have_net)
+			space2 += mctp_put_rtnlmsg_attr(&rta2, &rta_len2,
+				IFLA_MCTP_NET, &net, sizeof(net));
+		rta1 = (void*)buff1;
+		rta_len1 = sizeof(buff1);
+		space1 = mctp_put_rtnlmsg_attr(&rta1, &rta_len1,
+			AF_MCTP|NLA_F_NESTED, buff2, space2);
+		msg.nh.nlmsg_len += mctp_put_rtnlmsg_attr(&rta, &rta_len,
+			IFLA_AF_SPEC|NLA_F_NESTED, buff1, space1);
+	}
+
+	return mctp_nl_send(ctx->nl, &msg.nh);
+}
+
+
+//
 int main(int argc, char * const *argv)
 {
         struct ctx _ctx, *ctx;
@@ -254,6 +447,9 @@ int main(int argc, char * const *argv)
 	}
 	/* Set max message size to something more reasonable than 64k */
 	mctp_set_max_message_size(ctx->mctp, 32768*10);
+
+	/* Setup netlink */
+	ctx->nl = mctp_nl_new(ctx->verbose);
 
        /* Setup astlpc binding */
        ctx->astlpc = mctp_astlpc_init_fileio();
@@ -314,8 +510,13 @@ int main(int argc, char * const *argv)
 //		mctp_set_capture_handler(ctx->mctp, capture_socket,
 //					 ctx->pcap.binding.socket.dumper);
 	}
+	
+	/* Get ifindex for tun0 */
+	int ifindex = mctp_nl_ifindex_byname(ctx->nl, "tun0");
 
 	struct pollfd pollfds[2];
+	uint32_t current_mtu = MCTP_PACKET_SIZE(mctp_binding_astlpc_core(ctx->astlpc)->pkt_size);
+	uint32_t new_mtu = 0;
 	for (;;) {
 		// should these be inside or outside the for loop?
 		mctp_raw_init_pollfd(ctx->tun, &pollfds[0]);
@@ -346,6 +547,16 @@ int main(int argc, char * const *argv)
                        if (rc)
                                break;
                }
+		//If MTU has changed, update kernel MTU
+		//astlpc->resquested_mtu
+		new_mtu = MCTP_PACKET_SIZE(mctp_binding_astlpc_core(ctx->astlpc)->pkt_size);
+		if (new_mtu != current_mtu)
+		{
+			fprintf(stderr, "MTU change request from %d to %d\n", current_mtu, new_mtu);
+			fprintf(stderr, "reqeusted MTU %d, sizeof mctp_hdr %d\n", mctp_binding_astlpc_core(ctx->astlpc)->mtu, sizeof(struct mctp_hdr));
+			do_link_set(ctx, ifindex, true, true, new_mtu, false, 0);
+			current_mtu = new_mtu;
+		}
        }
 	
 	fprintf(stderr, "Shouldn't get here. rc: %d\n", rc);
