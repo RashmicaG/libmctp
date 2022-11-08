@@ -554,9 +554,13 @@ int main(int argc, char * const *argv)
 		{
 			fprintf(stderr, "MTU change request from %d to %d\n", current_mtu, new_mtu);
 			fprintf(stderr, "reqeusted MTU %d, sizeof mctp_hdr %d\n", mctp_binding_astlpc_core(ctx->astlpc)->mtu, sizeof(struct mctp_hdr));
+			// somehow ->mtu and MCTP_PACKET_SIZE(->pkt_size are 8 diff but sizeof struct mctp_hdr is 4)
 			do_link_set(ctx, ifindex, true, true, new_mtu, false, 0);
 			current_mtu = new_mtu;
 		}
+//sz = astlpc->proto->packet_size(MCTP_PACKET_SIZE(mtu));
+//astlpc->binding.pkt_size = MCTP_PACKET_SIZE(mtu);
+//max_payload_len = MCTP_BODY_SIZE(bus->binding->pkt_size);
        }
 	
 	fprintf(stderr, "Shouldn't get here. rc: %d\n", rc);
