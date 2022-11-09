@@ -548,7 +548,7 @@ void mctp_bus_rx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 		goto out;
 
 	if (binding->bus->capture)
-		binding->bus->capture(pkt, binding->bus->capture_data);
+		binding->bus->capture(pkt, false, binding->bus->capture_data);
 
 	hdr = mctp_pktbuf_hdr(pkt);
 
@@ -682,7 +682,7 @@ static int mctp_packet_tx(struct mctp_bus *bus,
 		return -1;
 
 	if (binding->bus->capture)
-		binding->bus->capture(pkt, binding->bus->capture_data);
+		binding->bus->capture(pkt, true, binding->bus->capture_data);
 
 	return bus->binding->tx(bus->binding, pkt);
 }
